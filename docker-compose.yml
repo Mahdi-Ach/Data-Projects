@@ -1,0 +1,126 @@
+services:
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    container_name: minio
+    user: "0:0"
+    ports:
+      - "9002:9000"
+      - "9003:9001"
+    networks:
+      - lakehouse-net 
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    restart: always
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    environment:
+      - CLUSTER_NAME=hadoop_cluster
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      - ENSURE_NAMENODE_DIR=/tmp/hadoop-root/dfs/name
+    volumes:
+      - hadoop_namenode:/hadoop/dfs/name
+
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode
+    restart: always
+    ports:
+      - "9864:9864"
+    environment:
+      - SERVICE_PRECONDITION=namenode:9870
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+    volumes:
+      - hadoop_datanode:/hadoop/dfs/data
+    depends_on:
+      - namenode
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka-lakehouse
+    ports:
+      - "9092:9092"      # Pour Windows (Jupyter)
+      - "29092:29092"    # Pour Airflow (Docker)
+    networks:
+      - lakehouse-net
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # On écoute sur les deux ports
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      # On annonce : localhost pour Windows, kafka pour Docker
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    ports:
+      - "5434:5432"
+    networks:
+      - lakehouse-net
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  airflow:
+    image: apache/airflow:2.8.1-python3.11
+    container_name: airflow
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    depends_on:
+      - postgres
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      KAFKA_SERVER: kafka:29092
+      MINIO_SERVER: minio:9000
+      POSTGRES_SERVER: postgres:5432
+    ports:
+      - "8080:8080"
+    networks:
+      - lakehouse-net
+    volumes:                          # ← AJOUTEZ CETTE LIGNE
+      - ./dags:/opt/airflow/dags
+      - ./producer.py:/opt/airflow/producer.py
+      - ./consumer_to_bronze.py:/opt/airflow/consumer_to_bronze.py
+      - ./silver_to_minio.py:/opt/airflow/silver_to_minio.py
+      - ./load_postgres.py:/opt/airflow/load_postgres.py
+      - ./gold_project:/opt/airflow/gold_project
+      - ./profiles.yml:/opt/airflow/gold_project/profiles.yml
+    command: >
+      bash -c "airflow db migrate && airflow users create --username admin --password admin --firstname A --lastname B --role Admin --email a@b.com && airflow webserver & airflow scheduler"
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    networks:
+      - lakehouse-net
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+networks:
+  lakehouse-net:
+    driver: bridge
+volumes:
+  minio_data:
+  postgres_data:
+  hadoop_namenode:
+  hadoop_datanode:
+  grafana_data:
