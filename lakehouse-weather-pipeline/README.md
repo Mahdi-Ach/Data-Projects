@@ -1,4 +1,3 @@
-
 # 🌦️ Lakehouse Pipeline Météo — Kafka → MinIO → PostgreSQL → dbt → Grafana
 
 Pipeline de données de bout en bout (architecture **Lakehouse** : Bronze → Silver → Gold) alimenté par l'API météo **Open-Meteo**, orchestré par **Apache Airflow**, avec visualisation dans **Grafana**.
@@ -7,17 +6,15 @@ Pipeline de données de bout en bout (architecture **Lakehouse** : Bronze → Si
 
 ## 📌 Architecture
 
-```
-┌─────────────┐     ┌─────────┐     ┌──────────────┐     ┌──────────────┐     ┌────────────┐     ┌─────────┐
-│  Open-Meteo │────▶│  Kafka  │────▶│ MinIO Bronze │────▶│ MinIO Silver │────▶│ PostgreSQL │────▶│ Grafana │
-│  (API)      │     │ (topic) │     │  (Parquet)   │     │  (Parquet)   │     │  (analytics)│     │(dashboard)│
-└─────────────┘     └─────────┘     └──────────────┘     └──────────────┘     └────────────┘     └─────────┘
-                                                                                    │
-                                                                                    ▼
-                                                                              ┌──────────┐
-                                                                              │   dbt    │
-                                                                              │gold_meteo│
-                                                                              └──────────┘
+```mermaid
+flowchart LR
+    A[Open-Meteo API] --> B[Kafka]
+    B --> C[MinIO Bronze]
+    C --> D[MinIO Silver]
+    D --> E[PostgreSQL]
+    E --> F[dbt]
+    F --> G[Grafana]
+    E --> G
 ```
 
 **Orchestration** : Apache Airflow (DAG `lakehouse_pipeline`)
@@ -43,21 +40,21 @@ Pipeline de données de bout en bout (architecture **Lakehouse** : Bronze → Si
 
 ```
 lakehouse-weather-pipeline/
-├── docker-compose.yml
-├── init.sql                    # ← AJOUT (création auto de la base analytics)
-├── requirements.txt            # ← AJOUT
-├── .gitignore                  # ← AJOUT
-├── producer.py
-├── consumer_to_bronze.py
-├── silver_to_minio.py
-├── load_postgres.py
+├── docker-compose.yml          # Tous les services Docker
+├── init.sql                    # Création automatique de la base analytics
+├── requirements.txt            # Dépendances Python
+├── .gitignore                  # Fichiers ignorés par Git
+├── producer.py                 # Appelle Open-Meteo → Kafka
+├── consumer_to_bronze.py       # Kafka → MinIO Bronze
+├── silver_to_minio.py          # Bronze → Silver (nettoyage)
+├── load_postgres.py            # Silver → PostgreSQL
 ├── dags/
-│   └── pipeline_dag.py
+│   └── pipeline_dag.py         # DAG Airflow (orchestration)
 │   models/
-│   └── gold_events.sql
+│   └── gold_meteo.sql      # Modèle dbt (couche Gold)
 ├── gold_project/
-│   ├── dbt_project.yml
-│   ├── profiles.yml            # ← dans gold_project/
+│   ├── dbt_project.yml         # Configuration du projet dbt
+│   └── profiles.yml            # Configuration dbt (PostgreSQL)
 └── README.md
 ```
 
@@ -70,6 +67,7 @@ lakehouse-weather-pipeline/
 - Docker Desktop
 - Python 3.12 (avec `venv`)
 - Les bibliothèques Python : `kafka-python`, `minio`, `pandas`, `pyarrow`, `sqlalchemy`, `psycopg2-binary`, `requests`, `dbt-postgres`
+- Un fichier `init.sql` à la racine (crée la base `analytics` automatiquement au premier démarrage de PostgreSQL)
 
 ### 2. Démarrer les services
 
@@ -83,7 +81,7 @@ Vérifier que tout tourne :
 docker ps
 ```
 
-Les conteneurs doivent être en `Up` : `minio`, `kafka-lakehouse`, `postgres`, `airflow-webserver`, `airflow-scheduler`,`airflow-init (terminé)`,`grafana`.
+Les conteneurs doivent être en `Up` : `minio`, `kafka-lakehouse`, `postgres`, `airflow-webserver`, `airflow-scheduler`, `grafana`. Le conteneur `airflow-init` s'exécute une fois puis s'arrête (c'est normal).
 
 ### 3. Lancer le pipeline manuellement (Windows)
 
@@ -101,14 +99,30 @@ python silver_to_minio.py
 python load_postgres.py
 
 # 5. Créer la vue Gold avec dbt
-dbt run --profiles-dir .
+cd gold_project && dbt run --profiles-dir .
 ```
 
 ### 4. Lancer le pipeline via Airflow (automatisé)
 
+> **Note** : le conteneur `airflow-init` s'exécute une fois (migrations + création de l'utilisateur admin) puis s'arrête. C'est normal.
+
 Ouvrir `http://localhost:8080` (admin / admin), activer le DAG `lakehouse_pipeline`, puis cliquer sur **Trigger DAG**.
 
 Le DAG exécute automatiquement les 5 étapes dans l'ordre : `produce` → `consume` → `silver` → `load` → `dbt`.
+
+---
+
+## 🔄 Reproductibilité
+
+Le projet est conçu pour être **cloné et lancé sans intervention manuelle** :
+
+1. `git clone <repo>`
+2. `docker compose up -d`
+3. PostgreSQL exécute `init.sql` au premier démarrage → crée la base `analytics`
+4. Airflow exécute `airflow-init` → migre la base et crée l'utilisateur admin
+5. Ouvrir Airflow (`http://localhost:8080`) et lancer le DAG
+
+Aucune commande SQL manuelle n'est nécessaire.
 
 ---
 
@@ -127,7 +141,7 @@ Le DAG exécute automatiquement les 5 étapes dans l'ordre : `produce` → `cons
 
 1. Ouvrir `http://localhost:3000` (admin / admin)
 2. Ajouter une source de données **PostgreSQL** :
-   - Host : `postgres:5432`
+   - Host : `postgres:5432` (nom du service Docker, pas `localhost`)
    - Database : `analytics`
    - User : `airflow`
    - Password : `airflow`
@@ -196,13 +210,40 @@ Exemple de données envoyées dans Kafka :
 |---|---|
 | **Kafka inaccessible depuis Airflow** | Configuration de deux listeners (`PLAINTEXT://localhost:9092` pour Windows, `INTERNAL://kafka:29092` pour Docker) + ajout de Kafka au réseau `lakehouse-net` |
 | **MinIO inaccessible depuis Airflow** | Ajout de MinIO au réseau `lakehouse-net` (nom de service résolu par Docker) |
-| **dbt ne trouvait pas `profiles.yml`** | Montage du fichier dans le conteneur via un volume Docker |
+| **dbt ne trouvait pas `profiles.yml`** | Montage du fichier dans le conteneur via un volume Docker (`./gold_project/profiles.yml:/opt/airflow/gold_project/profiles.yml`) |
 | **Conflit de port PostgreSQL** | Changement du port exposé (`5434` au lieu de `5432`, déjà occupé par PostgreSQL local) |
 | **`if_exists='replace'` échouait** | Suppression de la vue `gold_meteo` avant de recréer la table (`DROP VIEW CASCADE`) |
 | **`delete_rows` non supporté dans Airflow** | Utilisation de `DELETE FROM` + `append` (compatible avec toutes les versions de pandas) |
 | **`conn.commit()` non supporté dans SQLAlchemy 1.4** | Utilisation de `engine.begin()` (transaction automatique) |
 | **Kafka accumulait des milliers de messages** | Suppression du volume Kafka (`kafka_kafka-data`) et recréation du topic `events` |
+| **`airflow db init` supprimé** | Remplacé par `airflow db migrate` (depuis Airflow 2.7+) |
+| **Conteneur Airflow instable (webserver + scheduler dans le même conteneur)** | Séparation en deux services : `airflow-webserver` et `airflow-scheduler` |
+| **Base `analytics` absente après déplacement du projet** | Ajout de `init.sql` monté dans `/docker-entrypoint-initdb.d/` pour créer la base automatiquement |
+| **Erreur 403 sur les logs Airflow** | Ajout de `AIRFLOW__WEBSERVER__SECRET_KEY` identique dans le webserver et le scheduler |
+| **`dbt_project.yml` introuvable dans Airflow** | Vérification du montage de `gold_project/` dans le conteneur |
+| **Conflit de port MinIO / HDFS** | MinIO déplacé sur `9002/9003`, HDFS garde `9000` |
 
+---
+
+## 🧹 Fichiers ignorés (`.gitignore`)
+
+```
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+gold_project/target/
+gold_project/logs/
+gold_project/.user.yml
+airflow/logs/
+.DS_Store
+.idea/
+.vscode/
+```
+
+Ces fichiers sont générés automatiquement (cache Python, logs dbt, logs Airflow) et ne doivent pas être versionnés.
+
+---
 
 ## 📝 Licence
 
