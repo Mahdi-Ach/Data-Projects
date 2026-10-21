@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+dags/__pycache__/
 gold_project/target/
 gold_project/logs/
 gold_project/.user.yml
