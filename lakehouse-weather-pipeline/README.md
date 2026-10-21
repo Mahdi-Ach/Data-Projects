@@ -42,18 +42,22 @@ Pipeline de données de bout en bout (architecture **Lakehouse** : Bronze → Si
 ## 📂 Structure du projet
 
 ```
-Data Piplines/
-├── docker-compose.yml          # Tous les services Docker
-├── profiles.yml                # Configuration dbt (PostgreSQL)
-├── dbt_project.yml             # Configuration du projet dbt
-├── producer.py                 # Appelle Open-Meteo → Kafka
-├── consumer_to_bronze.py       # Kafka → MinIO Bronze
-├── silver_to_minio.py          # Bronze → Silver (nettoyage)
-├── load_postgres.py            # Silver → PostgreSQL
+lakehouse-weather-pipeline/
+├── docker-compose.yml
+├── init.sql                    # ← AJOUT (création auto de la base analytics)
+├── requirements.txt            # ← AJOUT
+├── .gitignore                  # ← AJOUT
+├── producer.py
+├── consumer_to_bronze.py
+├── silver_to_minio.py
+├── load_postgres.py
 ├── dags/
-│   └── pipeline_dag.py         # DAG Airflow (orchestration)
-├── models/
-│   └── gold_meteo.sql          # Modèle dbt (couche Gold)
+│   └── pipeline_dag.py
+│   models/
+│   └── gold_events.sql
+├── gold_project/
+│   ├── dbt_project.yml
+│   ├── profiles.yml            # ← dans gold_project/
 └── README.md
 ```
 
@@ -79,7 +83,7 @@ Vérifier que tout tourne :
 docker ps
 ```
 
-Les conteneurs doivent être en `Up` : `minio`, `kafka-lakehouse`, `datapiplines-postgres-1`, `airflow`, `datapiplines-grafana-1`.
+Les conteneurs doivent être en `Up` : `minio`, `kafka-lakehouse`, `postgres`, `airflow-webserver`, `airflow-scheduler`,`airflow-init (terminé)`,`grafana`.
 
 ### 3. Lancer le pipeline manuellement (Windows)
 
