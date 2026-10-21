@@ -9,3 +9,5 @@ airflow/logs/
 .DS_Store
 .idea/
 .vscode/
+target/
+logs/
