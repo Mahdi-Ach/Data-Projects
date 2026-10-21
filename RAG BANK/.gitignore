@@ -1,1 +1,12 @@
-venv
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+gold_project/target/
+gold_project/logs/
+gold_project/.user.yml
+airflow/logs/
+.DS_Store
+.idea/
+.vscode/
+chroma_db/
